@@ -49,6 +49,20 @@ ENV_DISPLAY_ID = "VIEWSONIC_LFD_DISPLAY_ID"
 ENV_TIMEOUT = "VIEWSONIC_LFD_TIMEOUT"
 ENV_RETRIES = "VIEWSONIC_LFD_RETRIES"
 
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_NO_SIGNAL = 3
+EXIT_SIGNAL_UNKNOWN = 4
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """A transaction plus decoded data and a process exit code."""
+
+    transaction: ViewSonicTransaction
+    data: dict[str, object]
+    exit_code: int = EXIT_OK
+
 
 @dataclass(frozen=True)
 class CliConfig:
@@ -180,6 +194,20 @@ def build_parser() -> argparse.ArgumentParser:
     input_subcommands = input_cmd.add_subparsers(dest="action", required=True)
     input_subcommands.add_parser("get", help="read input source")
     input_subcommands.add_parser("list", help="list known input names and codes")
+    signal = subcommands.add_parser(
+        "signal",
+        help="input-signal detection on the active input",
+    )
+    signal_subcommands = signal.add_subparsers(dest="action", required=True)
+    signal_subcommands.add_parser(
+        "get",
+        help=(
+            f"report whether the active input has a signal; exit {EXIT_OK} = "
+            f"signal, {EXIT_NO_SIGNAL} = no signal, "
+            f"{EXIT_SIGNAL_UNKNOWN} = undetermined, {EXIT_ERROR} = error"
+        ),
+    )
+
     input_set = input_subcommands.add_parser("set", help="set input source")
     input_set.add_argument(
         "source",
@@ -359,11 +387,18 @@ def print_result(payload: dict[str, object], config: CliConfig) -> None:
             print(f"Skipped: {skipped}")
 
 
-def payload(message: str, transaction: ViewSonicTransaction) -> dict[str, object]:
-    return {
+def payload(
+    message: str,
+    transaction: ViewSonicTransaction,
+    data: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {
         "message": message,
         "transaction": transaction.to_dict(),
     }
+    if data:
+        result.update(data)
+    return result
 
 
 def run_command(
@@ -377,8 +412,23 @@ def run_command(
         return f"Power set to {args.state}", client.set_power(args.state)
 
     if args.group == "input" and args.action == "get":
-        source, transaction = client.get_input()
-        return f"Input: {source}", transaction
+        status, transaction = client.get_input()
+        return f"Input: {status}", CommandResult(
+            transaction, {"input": status.to_dict()}
+        )
+    if args.group == "signal" and args.action == "get":
+        status, transaction = client.get_input()
+        if status.signal is True:
+            text, exit_code = "detected", EXIT_OK
+        elif status.signal is False:
+            text, exit_code = "none", EXIT_NO_SIGNAL
+        else:
+            text, exit_code = "unknown", EXIT_SIGNAL_UNKNOWN
+        source = status.source.label if status.source else f"input code {status.code}"
+        return (
+            f"Signal: {text} on {source}",
+            CommandResult(transaction, {"input": status.to_dict()}, exit_code),
+        )
     if args.group == "input" and args.action == "set":
         transaction = client.set_input(args.source)
         try:
@@ -591,9 +641,12 @@ def main(argv: list[str] | None = None) -> int:
         message, result = run_command(args, client)
         if isinstance(result, list):
             print_probe(message, result, config)
-        else:
-            print_result(payload(message, result), config)
-        return 0
+            return EXIT_OK
+        if isinstance(result, CommandResult):
+            print_result(payload(message, result.transaction, result.data), config)
+            return result.exit_code
+        print_result(payload(message, result), config)
+        return EXIT_OK
     except (ValueError, ViewSonicLfdError, OSError) as exc:
         parser.exit(1, f"vslfd: error: {exc}\n")
 

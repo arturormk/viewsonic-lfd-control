@@ -4,14 +4,24 @@ import unittest
 from contextlib import redirect_stdout
 
 from viewsonic_lfd import __version__
-from viewsonic_lfd.cli import build_parser, config_from_args, run_command
-from viewsonic_lfd.client import ViewSonicTransaction
+from viewsonic_lfd.cli import (
+    EXIT_NO_SIGNAL,
+    EXIT_OK,
+    EXIT_SIGNAL_UNKNOWN,
+    CommandResult,
+    build_parser,
+    config_from_args,
+    payload,
+    run_command,
+)
+from viewsonic_lfd.client import ViewSonicTransaction, decode_input_status
 from viewsonic_lfd.protocol import classify_packet
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, input_reply="104"):
         self.calls = []
+        self.input_reply = input_reply
 
     def _transaction(self, request=b"801gl000\r", response=b"801rl001\r"):
         return ViewSonicTransaction(request, classify_packet(response))
@@ -27,6 +37,13 @@ class FakeClient:
     def set_input(self, source):
         self.calls.append(("set_input", source))
         return self._transaction(b'801s"004\r', b"401+\r")
+
+    def get_input(self):
+        self.calls.append(("get_input",))
+        value = self.input_reply
+        return decode_input_status(value), self._transaction(
+            b"801gj000\r", b"801rj" + value.encode() + b"\r"
+        )
 
     def raw_get(self, command, selector="000"):
         self.calls.append(("raw_get", command, selector))
@@ -151,6 +168,30 @@ class CliTests(unittest.TestCase):
         message, _transaction = run_command(args, client)
         self.assertEqual(message, "Input set to HDMI 1 (hdmi1)")
         self.assertEqual(client.calls, [("set_input", "hdmi1")])
+
+    def test_run_input_get_includes_decoded_data(self):
+        args = self.parse(["--host", "192.0.2.10", "input", "get"])
+        message, result = run_command(args, FakeClient())
+        self.assertEqual(message, "Input: HDMI 1 (hdmi1), signal detected")
+        self.assertIsInstance(result, CommandResult)
+        self.assertEqual(result.exit_code, EXIT_OK)
+        data = payload(message, result.transaction, result.data)
+        self.assertEqual(data["input"]["name"], "hdmi1")
+        self.assertIs(data["input"]["signal"], True)
+
+    def test_run_signal_get_exit_codes(self):
+        args = self.parse(["--host", "192.0.2.10", "signal", "get"])
+        cases = {
+            "104": ("Signal: detected on HDMI 1", EXIT_OK),
+            "004": ("Signal: none on HDMI 1", EXIT_NO_SIGNAL),
+            "XYZ": ("Signal: unknown on input code XYZ", EXIT_SIGNAL_UNKNOWN),
+        }
+        for reply, (expected_message, expected_code) in cases.items():
+            with self.subTest(reply=reply):
+                message, result = run_command(args, FakeClient(reply))
+                self.assertEqual(message, expected_message)
+                self.assertEqual(result.exit_code, expected_code)
+                self.assertEqual(result.data["input"]["raw"], reply)
 
     def test_run_raw_get(self):
         args = self.parse(["--host", "192.0.2.10", "raw", "get", "l"])

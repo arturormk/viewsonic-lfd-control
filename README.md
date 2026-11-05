@@ -106,6 +106,39 @@ Names are matched ignoring case, spaces, `-` and `_`, so `hdmi1`, `HDMI 1`
 and `hdmi-1` are equivalent. Not every input exists on every model; the display
 rejects unsupported inputs with a NACK.
 
+### Input signal detection
+
+`signal get` reports whether the active input currently has a video signal.
+It reads the signal flag from the input Get reply, so it costs a single
+request:
+
+```bash
+vslfd --host 192.0.2.15 signal get            # "Signal: detected on HDMI 1"
+vslfd --host 192.0.2.15 --json signal get     # adds an "input" object with "signal": true/false
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Signal detected |
+| `1` | Error (connection, timeout, rejected request, ...) |
+| `2` | Invalid command-line usage |
+| `3` | No signal on the active input |
+| `4` | Reply did not include a recognizable signal flag |
+
+This makes it usable directly from shell scripts and monitoring checks:
+
+```bash
+vslfd --host 192.0.2.15 signal get || echo "display has no video signal"
+```
+
+The result is a snapshot of the moment of the query. To keep a history (for
+example, to show when the source started sending video), log it periodically,
+e.g. from cron every 5 minutes:
+
+```cron
+*/5 * * * * echo "$(date -Is) $(vslfd --host 192.0.2.15 power get) | $(vslfd --host 192.0.2.15 signal get 2>&1)" >> $HOME/vslfd-signal.log
+```
+
 The `raw` commands are intended for controlled protocol probing. Destructive
 raw Set packets require `--allow-destructive`.
 
