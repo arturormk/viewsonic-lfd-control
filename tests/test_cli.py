@@ -149,7 +149,7 @@ class CliTests(unittest.TestCase):
         args = self.parse(["--host", "192.0.2.10", "input", "set", "hdmi1"])
         client = FakeClient()
         message, _transaction = run_command(args, client)
-        self.assertEqual(message, "Input set to hdmi1")
+        self.assertEqual(message, "Input set to HDMI 1 (hdmi1)")
         self.assertEqual(client.calls, [("set_input", "hdmi1")])
 
     def test_run_raw_get(self):

@@ -92,6 +92,20 @@ vslfd --host 192.0.2.15 probe safe
 vslfd --serial-port /dev/ttyUSB0 power get
 ```
 
+### Input sources
+
+```bash
+vslfd input list                              # names, codes, aliases (no connection needed)
+vslfd --host 192.0.2.15 input set hdmi2
+vslfd --host 192.0.2.15 input set "DisplayPort 1"
+vslfd --host 192.0.2.15 input set 0A          # two-character code also works
+vslfd --host 192.0.2.15 input get             # e.g. "Input: HDMI 1 (hdmi1), signal detected"
+```
+
+Names are matched ignoring case, spaces, `-` and `_`, so `hdmi1`, `HDMI 1`
+and `hdmi-1` are equivalent. Not every input exists on every model; the display
+rejects unsupported inputs with a NACK.
+
 The `raw` commands are intended for controlled protocol probing. Destructive
 raw Set packets require `--allow-destructive`.
 

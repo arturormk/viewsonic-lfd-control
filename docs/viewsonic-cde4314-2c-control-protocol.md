@@ -677,7 +677,33 @@ Function multiplexer values from the supplemental source:
 | `003` | Touch off |
 | `103` | Touch on |
 
-Additional input values from the IFP source include TV, AV, S-Video, YPbPr, HDMI4, DVI, additional VGA/DP/Type-C entries, and internal memory. They should not be copied into the CDE model registry without testing because physical inputs differ by model.
+Additional input values from the IFP source include TV, AV, S-Video, YPbPr, HDMI4, DVI, additional VGA/DP/Type-C entries, and internal memory. Physical inputs differ by model, and a display rejects an unsupported input with a NACK.
+
+The client uses the following two-character input codes. A Set value is `0` followed by the code; a Get reply is a signal flag followed by the code (see [Input response encoding](#input-response-encoding)).
+
+| Code | Input | Client name |
+|---|---|---|
+| `00` | TV | `tv` |
+| `01` | AV | `av` |
+| `02` | S-Video | `s-video` |
+| `03` | Component (YPbPr) | `component` |
+| `04` | HDMI 1 | `hdmi1` |
+| `14` | HDMI 2 | `hdmi2` |
+| `24` | HDMI 3 | `hdmi3` |
+| `34` | HDMI 4 | `hdmi4` |
+| `05` | DVI | `dvi` |
+| `06` | VGA 1 | `vga1` |
+| `16` | VGA 2 | `vga2` |
+| `26` | VGA 3 | `vga3` |
+| `07` | Slot-in PC (OPS/SDM) / HDBaseT | `ops` |
+| `08` | Internal memory | `internal-memory` |
+| `09` | DisplayPort 1 | `dp1` |
+| `29` | DisplayPort 2 | `dp2` |
+| `19` | USB-C 1 | `usb-c1` |
+| `39` | USB-C 2 | `usb-c2` |
+| `0A` | Embedded Android | `android` |
+
+Only `04` (HDMI 1) has been confirmed on real hardware through a Get reply; the other codes come from documentation.
 
 ---
 
@@ -739,6 +765,14 @@ The supplemental source says:
 - second and third digits identify the input.
 
 Do not assume that the three-byte Get response is identical to the three-byte Set input value. Log real responses and build a CDE-specific mapping from observation.
+
+Observed on real hardware with HDMI 1 active and a source connected:
+
+```text
+801gj000\r  ->  801rj104\r    signal detected (1), input code 04 = HDMI 1
+```
+
+This is consistent with the Set value for HDMI 1 (`004`) once the leading digit is treated as the signal flag. The other input codes have not been confirmed by a Get reply yet.
 
 ### Thermal response
 
@@ -1366,6 +1400,7 @@ Do not silently normalize these in code without a compatibility layer.
 11. **Input response mapping**
     - The supplemental source describes a signal flag plus an input code in only three bytes.
     - Record actual CDE replies before defining a complete enum.
+    - Confirmed so far: `104` = signal detected, HDMI 1 (code `04`).
 
 ---
 

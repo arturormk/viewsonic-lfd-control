@@ -21,6 +21,7 @@ from .client import (
     BUTTON_LOCK_SET_COMMAND,
     DEFAULT_DISPLAY_ID,
     DEFAULT_RETRIES,
+    INPUT_SOURCES,
     LOCK_STATE_NAMES,
     MENU_LOCK_SET_COMMAND,
     MUTE_GET_COMMAND,
@@ -36,6 +37,7 @@ from .client import (
     ViewSonicLfdClient,
     ViewSonicLfdError,
     ViewSonicTransaction,
+    resolve_input,
 )
 from .protocol import hex_bytes, validate_display_id, validate_field3
 from .transport import DEFAULT_PORT, DEFAULT_TIMEOUT
@@ -177,8 +179,13 @@ def build_parser() -> argparse.ArgumentParser:
     input_cmd = subcommands.add_parser("input", help="input-source commands")
     input_subcommands = input_cmd.add_subparsers(dest="action", required=True)
     input_subcommands.add_parser("get", help="read input source")
+    input_subcommands.add_parser("list", help="list known input names and codes")
     input_set = input_subcommands.add_parser("set", help="set input source")
-    input_set.add_argument("source", help="source name or three-byte value")
+    input_set.add_argument(
+        "source",
+        help="input name (e.g. hdmi1, dp, usb-c, ops, android; see 'input list'), "
+        "two-character code (e.g. 04), or raw three-byte value",
+    )
 
     brightness = subcommands.add_parser("brightness", help="brightness commands")
     add_percentage_commands(brightness)
@@ -373,7 +380,13 @@ def run_command(
         source, transaction = client.get_input()
         return f"Input: {source}", transaction
     if args.group == "input" and args.action == "set":
-        return f"Input set to {args.source}", client.set_input(args.source)
+        transaction = client.set_input(args.source)
+        try:
+            target = resolve_input(args.source)
+            label = f"{target.label} ({target.name})"
+        except ValueError:
+            label = args.source
+        return f"Input set to {label}", transaction
 
     if args.group == "brightness" and args.action == "get":
         value, transaction = client.get_percentage(BRIGHTNESS_GET_COMMAND, "brightness")
@@ -533,9 +546,37 @@ def print_probe(
         print(f"{hex_bytes(transaction.request)} -> {response_text}")
 
 
+def format_input_list(json_output: bool) -> str:
+    if json_output:
+        return json.dumps(
+            [
+                {
+                    "name": src.name,
+                    "label": src.label,
+                    "code": src.code,
+                    "set_value": src.set_value,
+                    "aliases": list(src.aliases),
+                }
+                for src in INPUT_SOURCES
+            ],
+            indent=2,
+        )
+    lines = [f"{'NAME':<16} {'CODE':<5} {'LABEL':<32} ALIASES"]
+    for src in INPUT_SOURCES:
+        lines.append(
+            f"{src.name:<16} {src.code:<5} {src.label:<32} {', '.join(src.aliases)}"
+        )
+    lines.append("Not every input is available on every model.")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.group == "input" and args.action == "list":
+        print(format_input_list(args.json))
+        return 0
 
     try:
         config = config_from_args(args, os.environ)

@@ -62,38 +62,112 @@ RESTORE_DEFAULTS_COMMAND = "~"
 POWER_SET_VALUES = {"standby": "000", "off": "000", "on": "001"}
 POWER_GET_VALUES = {"000": "standby", "001": "on"}
 
-INPUT_VALUES = {
-    "hdmi1": "004",
-    "hdmi-1": "004",
-    "hdmi2": "014",
-    "hdmi-2": "014",
-    "hdmi3": "024",
-    "hdmi-3": "024",
-    "third-hdmi": "024",
-    "vga": "006",
-    "ops": "007",
-    "slot-in-pc": "007",
-    "displayport": "009",
-    "display-port": "009",
-    "dp": "009",
-    "usb-c": "019",
-    "usbc": "019",
-    "type-c": "019",
-    "embedded-android": "00A",
-    "android": "00A",
-    "main-android": "00A",
-}
 
-VALUE_TO_INPUT = {
-    "004": "hdmi1",
-    "014": "hdmi2",
-    "024": "hdmi3",
-    "006": "vga",
-    "007": "ops",
-    "009": "displayport",
-    "019": "usb-c",
-    "00A": "embedded-android",
-}
+@dataclass(frozen=True)
+class InputSource:
+    """An input source identified by its two-character protocol code.
+
+    Set requests send ``"0" + code``; Get replies return a signal flag
+    (``0``/``1``) followed by the same two-character code.
+    """
+
+    code: str
+    name: str
+    label: str
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def set_value(self) -> str:
+        return "0" + self.code
+
+
+# Not every input exists on every model; the display NACKs unsupported ones.
+INPUT_SOURCES: tuple[InputSource, ...] = (
+    InputSource("00", "tv", "TV"),
+    InputSource("01", "av", "AV", ("composite",)),
+    InputSource("02", "s-video", "S-Video"),
+    InputSource("03", "component", "Component (YPbPr)", ("ypbpr",)),
+    InputSource("04", "hdmi1", "HDMI 1", ("hdmi",)),
+    InputSource("14", "hdmi2", "HDMI 2"),
+    InputSource("24", "hdmi3", "HDMI 3", ("third-hdmi",)),
+    InputSource("34", "hdmi4", "HDMI 4"),
+    InputSource("05", "dvi", "DVI"),
+    InputSource("06", "vga1", "VGA 1", ("vga",)),
+    InputSource("16", "vga2", "VGA 2"),
+    InputSource("26", "vga3", "VGA 3"),
+    InputSource(
+        "07",
+        "ops",
+        "Slot-in PC (OPS/SDM) / HDBaseT",
+        ("slot-in-pc", "sdm", "hdbaset"),
+    ),
+    InputSource("08", "internal-memory", "Internal memory", ("memory", "media")),
+    InputSource("09", "dp1", "DisplayPort 1", ("dp", "displayport", "displayport1")),
+    InputSource("29", "dp2", "DisplayPort 2", ("displayport2",)),
+    InputSource("19", "usb-c1", "USB-C 1", ("usb-c", "type-c", "type-c1")),
+    InputSource("39", "usb-c2", "USB-C 2", ("type-c2",)),
+    InputSource(
+        "0A",
+        "android",
+        "Embedded Android",
+        ("embedded-android", "main-android"),
+    ),
+)
+
+INPUT_BY_CODE: dict[str, InputSource] = {src.code: src for src in INPUT_SOURCES}
+
+
+def _input_key(text: str) -> str:
+    """Normalize user input so 'HDMI 1', 'hdmi-1' and 'hdmi_1' all match."""
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+INPUT_BY_KEY: dict[str, InputSource] = {}
+for _src in INPUT_SOURCES:
+    for _alias in (_src.name, *_src.aliases, _src.code, _src.set_value):
+        INPUT_BY_KEY[_input_key(_alias)] = _src
+
+
+@dataclass(frozen=True)
+class InputStatus:
+    """Decoded reply to the input Get command."""
+
+    raw: str
+    code: str
+    signal: bool | None
+    source: InputSource | None
+
+    @property
+    def name(self) -> str:
+        return self.source.name if self.source else f"unknown:{self.code}"
+
+    def __str__(self) -> str:
+        if self.source is not None:
+            text = f"{self.source.label} ({self.source.name})"
+        else:
+            text = f"unknown input code {self.code!r} (raw {self.raw!r})"
+        if self.signal is True:
+            text += ", signal detected"
+        elif self.signal is False:
+            text += ", no signal"
+        return text
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "raw": self.raw,
+            "code": self.code,
+            "name": self.source.name if self.source else None,
+            "label": self.source.label if self.source else None,
+            "signal": self.signal,
+        }
+
+
+def decode_input_status(text: str) -> InputStatus:
+    if len(text) == 3 and text[0] in ("0", "1"):
+        code = text[1:].upper()
+        return InputStatus(text, code, text[0] == "1", INPUT_BY_CODE.get(code))
+    return InputStatus(text, text, None, INPUT_BY_CODE.get(text.upper()))
+
 
 BOOL_VALUES = {
     "off": "000",
@@ -314,16 +388,10 @@ class ViewSonicLfdClient:
     def set_input(self, source: str) -> ViewSonicTransaction:
         return self.set_value(INPUT_SET_COMMAND, input_name_to_value(source))
 
-    def get_input(self) -> tuple[str, ViewSonicTransaction]:
+    def get_input(self) -> tuple[InputStatus, ViewSonicTransaction]:
         transaction = self.get_value(INPUT_GET_COMMAND)
         response = require_response(transaction.response)
-        text = response.value_text
-        if len(text) == 3 and text[:1] in ("0", "1"):
-            input_code = text[1:]
-            signal = "signal" if text[0] == "1" else "no-signal"
-            name = VALUE_TO_INPUT.get(input_code, input_code)
-            return f"{signal}:{name}", transaction
-        return VALUE_TO_INPUT.get(text, text), transaction
+        return decode_input_status(response.value_text), transaction
 
     def get_percentage(
         self,
@@ -469,12 +537,23 @@ def name_to_value(name: str, values: dict[str, str]) -> str:
     return name
 
 
+def resolve_input(name: str) -> InputSource:
+    """Resolve a name, alias, two-char code or three-byte Set value."""
+    source = INPUT_BY_KEY.get(_input_key(name))
+    if source is None:
+        names = ", ".join(src.name for src in INPUT_SOURCES)
+        raise ValueError(f"unknown input {name!r}; expected one of: {names}")
+    return source
+
+
 def input_name_to_value(name: str) -> str:
-    normalized = name.strip().lower().replace("_", "-")
-    if normalized in INPUT_VALUES:
-        return INPUT_VALUES[normalized]
-    validate_field3(name, "input value")
-    return name
+    try:
+        return resolve_input(name).set_value
+    except ValueError:
+        # Allow undocumented three-byte values for probing.
+        if len(name.strip()) == 3:
+            return validate_field3(name.strip(), "input value")
+        raise
 
 
 def percentage_or_step_to_value(value: str, label: str) -> str:
